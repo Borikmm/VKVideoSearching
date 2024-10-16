@@ -14,16 +14,18 @@ class VKVideoSearch:
         async with session.get(url, params=params) as response:
             return await response.json()
 
-    async def search_videos(self, query: str, count: int = 50, filters: Dict[str, Any] = None, sort_by: str = 'popularity') -> List[Dict]:
-        """Поиск коротких видео по ключевым словам или хэштегам."""
+    async def search_videos(self, query: str, count: int = 50, filters: Dict[str, Any] = None, sort_by: str = 'popularity', max_pages: int = 5) -> List[Dict]:
+        """Поиск коротких видео по ключевым словам или хэштегам с фильтрами и пагинацией."""
         url = f'{VK_API_URL}video.search'
         params = {
             'access_token': self.token,
             'v': API_VERSION,
             'q': query,
             'count': count,
-            'short': 1,  # Ищем только короткие видео
-            'sort': 2 if sort_by == 'popularity' else 0,  # 2 - сортировка по популярности, 0 - по дате
+            'sort': 2 if sort_by == 'popularity' else 1,  # 2 - сортировка по популярности, 1 - по дате
+            'filters': 'short',  # Ищем только короткие видео
+            'extended': 1,  # Получаем расширенную информацию (лайки, просмотры, комментарии)
+            'offset': 0  # Начальная позиция для пагинации
         }
 
         if filters:
@@ -35,15 +37,26 @@ class VKVideoSearch:
                 params['min_likes'] = filters['min_likes']
             if 'min_views' in filters:
                 params['min_views'] = filters['min_views']
+            if 'min_duration' in filters and 'max_duration' in filters:
+                params['filters'] = f"duration={filters['min_duration']},{filters['max_duration']}"
 
+        all_videos = []
         async with aiohttp.ClientSession() as session:
-            result = await self.fetch(session, url, params)
+            for page in range(max_pages):
+                params['offset'] = page * count  # Смещение для пагинации
+                result = await self.fetch(session, url, params)
 
-            if 'response' not in result:
-                raise ValueError(f"Ошибка получения видео: {result.get('error')}")
+                if 'response' not in result:
+                    raise ValueError(f"Ошибка получения видео: {result.get('error')}")
 
-            videos = result['response']['items']
-            return self.remove_duplicates(videos)
+                videos = result['response']['items']
+                all_videos.extend(videos)
+
+                # Если вернулось меньше видео, чем запрашивали, выходим из цикла
+                if len(videos) < count:
+                    break
+
+            return self.remove_duplicates(all_videos)
 
     def remove_duplicates(self, videos: List[Dict]) -> List[Dict]:
         """Исключение одинаковых видео по ID."""
@@ -67,18 +80,20 @@ class VKVideoSearch:
 
 # Пример использования модуля:
 async def main():
-    token = 'ваш_токен'  # Укажите свой токен API ВКонтакте
+    token = 'vk1.a.KYCHMPKEEGwczPiIWFRvJS2ZQKE6bXcJoJkwZI9OI7Z5P1mbg4m4WE0MnJd7GzjOxXF3GKfHUGFxBAgHSmy1mByw3qozl7gVmxjzxa1H0S5QW3lLpUaE5B4iKzOzA5kHj9gjeVR2DszfPEkka2_ZAL8qQ4W0ZCLu-8XkIbcO9cm-Xgg9HLciR9a2pCLovy3qy7aSxM1Vep7T1-V63WtDpA'  # Укажите свой токен API ВКонтакте
     vk_search = VKVideoSearch(token)
 
-    # Выполняем поиск по ключевым словам
+    # Выполняем поиск с фильтром по длительности (в секундах) и пагинацией
     try:
         videos = await vk_search.search_videos(query='путешествия', count=10, filters={
             'min_likes': 100,
             'date_from': '2023-01-01',
-        }, sort_by='popularity')
+            'min_duration': 10,  # Минимальная длина видео 10 секунд
+            'max_duration': 60   # Максимальная длина видео 60 секунд
+        }, sort_by='popularity', max_pages=3)
 
-        # Сортируем видео по количеству лайков
-        sorted_videos = vk_search.sort_videos(videos, sort_by='likes')
+        # Сортируем видео по количеству просмотров
+        sorted_videos = vk_search.sort_videos(videos, sort_by='views')
         for video in sorted_videos:
             print(f"Название: {video['title']}, Лайков: {video['likes']['count']}, Просмотров: {video['views']}")
     except Exception as e:
